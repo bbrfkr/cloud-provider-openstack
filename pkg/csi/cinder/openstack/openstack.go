@@ -96,10 +96,13 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.A
 	// Get config from file
 	var authOpts gophercloud.AuthOptions
 	var epOpts gophercloud.EndpointOpts
+	var authOptsExt trusts.AuthOptsExt
+	var authUrl string
+
 	config, err := os.Open(configFilePath)
 	if err != nil {
 		klog.V(3).Infof("Failed to open OpenStack configuration file: %v", err)
-		return authOpts, (trusts.AuthOptsExt)(nil), "", epOpts, err
+		return authOpts, authOptsExt, authUrl, epOpts, err
 	}
 	defer config.Close()
 
@@ -108,7 +111,7 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.A
 	err = gcfg.FatalOnly(gcfg.ReadInto(&cfg, config))
 	if err != nil {
 		klog.V(3).Infof("Failed to read OpenStack configuration file: %v", err)
-		return authOpts, (trusts.AuthOptsExt)(nil), "", epOpts, err
+		return authOpts, authOptsExt, authUrl, epOpts, err
 	}
 
 	authOpts = cfg.toAuthOptions()
@@ -116,7 +119,6 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.A
 		Region: cfg.Global.Region,
 	}
 
-	authOptsExt := (trusts.AuthOptsExt)(nil)
 	authUrl := cfg.Global.AuthUrl
 
 	if cfg.Global.TrustID != "" {
@@ -172,7 +174,7 @@ func GetOpenStackProvider() (IOpenStack, error) {
 			return nil, err
 		}
 
-		if authOptsExt != (trusts.AuthOptsExt)(nil) {
+		if &authOptsExt != nil {
 			err = openstack.AuthenticateV3(provider, authOptsExt, gophercloud.EndpointOpts{})
 		} else {
 			err = openstack.Authenticate(provider, authOpts)
