@@ -123,7 +123,7 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.A
 
 	if cfg.Global.TrustID != "" {
 		opts := cfg.toAuth3Options()
-		authOptsExt := trusts.AuthOptsExt{
+		authOptsExt = trusts.AuthOptsExt{
 			TrustID:            cfg.Global.TrustID,
 			AuthOptionsBuilder: &opts,
 		}
