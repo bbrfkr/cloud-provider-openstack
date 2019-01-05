@@ -92,7 +92,7 @@ func (cfg Config) toAuth3Options() tokens3.AuthOptions {
 	}
 }
 
-func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, gophercloud.EndpointOpts, error) {
+func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.AuthOptsExt, string, gophercloud.EndpointOpts, error) {
 	// Get config from file
 	var authOpts gophercloud.AuthOptions
 	var epOpts gophercloud.EndpointOpts
@@ -116,7 +116,7 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, gophercl
 		Region: cfg.Global.Region,
 	}
 
-	authOptsExt := nil
+	authOptsExt := ""
 	authUrl := cfg.Global.AuthUrl
 
 	if cfg.Global.TrustID != "" {
@@ -172,10 +172,10 @@ func GetOpenStackProvider() (IOpenStack, error) {
 			return nil, err
 		}
 
-		if authOptsExt != nil {
+		if authOptsExt != "" {
 			err = openstack.AuthenticateV3(provider, authOptsExt, gophercloud.EndpointOpts{})
 		} else {
-			err = openstack.Authenticate(provider, cfg.toAuthOptions())
+			err = openstack.Authenticate(provider, authOpts)
 		}
 		if err != nil {
 			return nil, err
