@@ -24,6 +24,9 @@ import (
 	"github.com/gophercloud/gophercloud/openstack/blockstorage/v3/snapshots"
 	"gopkg.in/gcfg.v1"
 	"k8s.io/klog"
+
+	"github.com/gophercloud/gophercloud/openstack/identity/v3/extensions/trusts"
+	tokens3 "github.com/gophercloud/gophercloud/openstack/identity/v3/tokens"
 )
 
 type IOpenStack interface {
@@ -69,12 +72,23 @@ func (cfg Config) toAuthOptions() gophercloud.AuthOptions {
 		Password:         cfg.Global.Password,
 		TenantID:         cfg.Global.TenantId,
 		TenantName:       cfg.Global.TenantName,
-		TrustID:          cfg.Global.TrustID,
 		DomainID:         cfg.Global.DomainId,
 		DomainName:       cfg.Global.DomainName,
 
 		// Persistent service, so we need to be able to renew tokens.
 		AllowReauth: true,
+	}
+}
+
+func (cfg Config) toAuth3Options() tokens3.AuthOptions {
+	return tokens3.AuthOptions{
+		IdentityEndpoint: cfg.Global.AuthUrl,
+		Username:         cfg.Global.Username,
+		UserID:           cfg.Global.UserId,
+		Password:         cfg.Global.Password,
+		DomainID:         cfg.Global.DomainId,
+		DomainName:       cfg.Global.DomainName,
+		AllowReauth:      true,
 	}
 }
 
@@ -142,11 +156,21 @@ func GetOpenStackProvider() (IOpenStack, error) {
 			}
 		}
 
-		// Authenticate Client
-		provider, err := openstack.AuthenticatedClient(authOpts)
+		provider, err := openstack.NewClient(cfg.Global.AuthURL)
 		if err != nil {
 			return nil, err
 		}
+
+		if cfg.Global.TrustID != "" {
+			opts := cfg.toAuth3Options()
+			authOptsExt := trusts.AuthOptsExt{
+				TrustID:            cfg.Global.TrustID,
+				AuthOptionsBuilder: &opts,
+			}
+			err = openstack.AuthenticateV3(provider, authOptsExt, gophercloud.EndpointOpts{})
+		} else {
+			err = openstack.Authenticate(provider, cfg.toAuthOptions())
+		}	
 
 		// Init Nova ServiceClient
 		computeclient, err := openstack.NewComputeV2(provider, epOpts)
