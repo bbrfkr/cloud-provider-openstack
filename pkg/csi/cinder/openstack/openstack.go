@@ -119,7 +119,7 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.A
 		Region: cfg.Global.Region,
 	}
 
-	authUrl := cfg.Global.AuthUrl
+	authUrl = cfg.Global.AuthUrl
 
 	if cfg.Global.TrustID != "" {
 		opts := cfg.toAuth3Options()
