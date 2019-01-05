@@ -116,7 +116,18 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, gophercl
 		Region: cfg.Global.Region,
 	}
 
-	return authOpts, epOpts, nil
+	authOptsExt := nil
+	authUrl := cfg.Global.AuthUrl
+
+	if cfg.Global.TrustID != "" {
+		opts := cfg.toAuth3Options()
+		authOptsExt := trusts.AuthOptsExt{
+			TrustID:            cfg.Global.TrustID,
+			AuthOptionsBuilder: &opts,
+		}
+	}
+
+	return authOpts, authOptsExt, authUrl, epOpts, nil
 }
 
 func GetConfigFromEnv() (gophercloud.AuthOptions, gophercloud.EndpointOpts, error) {
@@ -147,7 +158,7 @@ func GetOpenStackProvider() (IOpenStack, error) {
 
 	if OsInstance == nil {
 		// Get config from file
-		authOpts, epOpts, err := GetConfigFromFile(configFile)
+		authOpts, authOptsExt, authUrl, epOpts, err := GetConfigFromFile(configFile)
 		if err != nil {
 			// Get config from env
 			authOpts, epOpts, err = GetConfigFromEnv()
@@ -156,21 +167,19 @@ func GetOpenStackProvider() (IOpenStack, error) {
 			}
 		}
 
-		provider, err := openstack.NewClient(cfg.Global.AuthURL)
+		provider, err := openstack.NewClient(authUrl)
 		if err != nil {
 			return nil, err
 		}
 
-		if cfg.Global.TrustID != "" {
-			opts := cfg.toAuth3Options()
-			authOptsExt := trusts.AuthOptsExt{
-				TrustID:            cfg.Global.TrustID,
-				AuthOptionsBuilder: &opts,
-			}
+		if authOptsExt != nil {
 			err = openstack.AuthenticateV3(provider, authOptsExt, gophercloud.EndpointOpts{})
 		} else {
 			err = openstack.Authenticate(provider, cfg.toAuthOptions())
-		}	
+		}
+		if err != nil {
+			return nil, err
+		}
 
 		// Init Nova ServiceClient
 		computeclient, err := openstack.NewComputeV2(provider, epOpts)
