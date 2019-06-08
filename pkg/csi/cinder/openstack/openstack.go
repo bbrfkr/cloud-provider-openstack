@@ -17,12 +17,16 @@ limitations under the License.
 package openstack
 
 import (
+	"crypto/tls"
+	"net/http"
 	"os"
 
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack"
 	"github.com/gophercloud/gophercloud/openstack/blockstorage/v3/snapshots"
-	"gopkg.in/gcfg.v1"
+	gcfg "gopkg.in/gcfg.v1"
+	netutil "k8s.io/apimachinery/pkg/util/net"
+	certutil "k8s.io/client-go/util/cert"
 	"k8s.io/klog"
 
 	"github.com/gophercloud/gophercloud/openstack/identity/v3/extensions/trusts"
@@ -61,6 +65,7 @@ type Config struct {
 		DomainId   string `gcfg:"domain-id"`
 		DomainName string `gcfg:"domain-name"`
 		Region     string
+		CAFile     string `gcfg:"ca-file"`
 	}
 }
 
@@ -92,36 +97,33 @@ func (cfg Config) toAuth3Options() tokens3.AuthOptions {
 	}
 }
 
-func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.AuthOptsExt, string, gophercloud.EndpointOpts, error) {
-	// Get config from file
-	var authOpts gophercloud.AuthOptions
+// GetConfigFromFile retrieves config options from file
+func GetConfigFromFile(configFilePath string) (Config, trusts.AuthOptsExt, string, gophercloud.EndpointOpts, error) {
 	var epOpts gophercloud.EndpointOpts
+	var cfg Config
 	var authOptsExt trusts.AuthOptsExt
 	var authUrl string
 
 	config, err := os.Open(configFilePath)
 	if err != nil {
 		klog.V(3).Infof("Failed to open OpenStack configuration file: %v", err)
-		return authOpts, authOptsExt, authUrl, epOpts, err
+		return cfg, authOptsExt, authUrl, epOpts, err
 	}
 	defer config.Close()
 
-	// Read configuration
-	var cfg Config
 	err = gcfg.FatalOnly(gcfg.ReadInto(&cfg, config))
 	if err != nil {
 		klog.V(3).Infof("Failed to read OpenStack configuration file: %v", err)
-		return authOpts, authOptsExt, authUrl, epOpts, err
+		return cfg, authOptsExt, authUrl, epOpts, err
 	}
 
-	authOpts = cfg.toAuthOptions()
 	epOpts = gophercloud.EndpointOpts{
 		Region: cfg.Global.Region,
 	}
 
 	authUrl = cfg.Global.AuthUrl
 
-	if cfg.Global.TrustID != "" {
+ 	if cfg.Global.TrustID != "" {
 		opts := cfg.toAuth3Options()
 		authOptsExt = trusts.AuthOptsExt{
 			TrustID:            cfg.Global.TrustID,
@@ -129,9 +131,10 @@ func GetConfigFromFile(configFilePath string) (gophercloud.AuthOptions, trusts.A
 		}
 	}
 
-	return authOpts, authOptsExt, authUrl, epOpts, nil
+	return cfg, authOptsExt, authUrl, epOpts, nil
 }
 
+// GetConfigFromEnv retrieves config options from env
 func GetConfigFromEnv() (gophercloud.AuthOptions, gophercloud.EndpointOpts, error) {
 	// Get config from env
 	authOpts, err := openstack.AuthOptionsFromEnv()
@@ -149,57 +152,75 @@ func GetConfigFromEnv() (gophercloud.AuthOptions, gophercloud.EndpointOpts, erro
 }
 
 var OsInstance IOpenStack = nil
-var configFile string = "/etc/cloud.conf"
+var configFile = "/etc/cloud.conf"
 
 func InitOpenStackProvider(cfg string) {
 	configFile = cfg
 	klog.V(2).Infof("InitOpenStackProvider configFile: %s", configFile)
 }
 
+// GetOpenStackProvider returns Openstack Instance
 func GetOpenStackProvider() (IOpenStack, error) {
+	var authOpts gophercloud.AuthOptions
+	var authURL string
+	var caFile string
 
-	if OsInstance == nil {
-		// Get config from file
-		authOpts, authOptsExt, authUrl, epOpts, err := GetConfigFromFile(configFile)
-		if err != nil {
-			// Get config from env
-			authOpts, epOpts, err = GetConfigFromEnv()
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		provider, err := openstack.NewClient(authUrl)
-		if err != nil {
-			return nil, err
-		}
-
-		if &authOptsExt != nil {
-			err = openstack.AuthenticateV3(provider, authOptsExt, gophercloud.EndpointOpts{})
-		} else {
-			err = openstack.Authenticate(provider, authOpts)
-		}
+	if OsInstance != nil {
+		return OsInstance, nil
+	}
+	// Get config from file
+	cfg, authOptsExt, authURL, epOpts, err := GetConfigFromFile(configFile)
+	if err == nil {
+		authOpts = cfg.toAuthOptions()
+		caFile = cfg.Global.CAFile
+	} else {
+		// Get config from env
+		authOpts, epOpts, err = GetConfigFromEnv()
 		if err != nil {
 			return nil, err
 		}
+	}
 
-		// Init Nova ServiceClient
-		computeclient, err := openstack.NewComputeV2(provider, epOpts)
+	provider, err := openstack.NewClient(authURL)
+	if err != nil {
+		return nil, err
+	}
+
+	if caFile != "" {
+		roots, err := certutil.NewPool(caFile)
 		if err != nil {
 			return nil, err
 		}
+		config := &tls.Config{}
+		config.RootCAs = roots
+		provider.HTTPClient.Transport = netutil.SetOldTransportDefaults(&http.Transport{TLSClientConfig: config})
+	}
 
-		// Init Cinder ServiceClient
-		blockstorageclient, err := openstack.NewBlockStorageV3(provider, epOpts)
-		if err != nil {
-			return nil, err
-		}
+	if &authOptsExt != nil {
+		err = openstack.AuthenticateV3(provider, authOptsExt, gophercloud.EndpointOpts{})
+	} else {
+		err = openstack.Authenticate(provider, authOpts)
+	}
+	if err != nil {
+		return nil, err
+	}
 
-		// Init OpenStack
-		OsInstance = &OpenStack{
-			compute:      computeclient,
-			blockstorage: blockstorageclient,
-		}
+	// Init Nova ServiceClient
+	computeclient, err := openstack.NewComputeV2(provider, epOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Init Cinder ServiceClient
+	blockstorageclient, err := openstack.NewBlockStorageV3(provider, epOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Init OpenStack
+	OsInstance = &OpenStack{
+		compute:      computeclient,
+		blockstorage: blockstorageclient,
 	}
 
 	return OsInstance, nil
